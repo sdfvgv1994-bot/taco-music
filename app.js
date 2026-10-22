@@ -195,12 +195,14 @@ function onState(e) {
   }
   render();
 }
+let errTimer = 0;
 function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌入：標記起來，自動跳下一首
+  if (errTimer) return;   // 同一首報錯兩次：只換一次歌，免得跳過下一首
   const s = st.songs[st.cur];
   if (s) { s.bad = true; save(); }
   if (document.hidden) bgAdvance("這首無法播放，換下一首");
   playing = false; render();
-  setTimeout(() => step(1, true), 800);
+  errTimer = setTimeout(() => { errTimer = 0; step(1, true); }, 800);
 }
 
 window.onYouTubeIframeAPIReady = function () {
