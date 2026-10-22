@@ -59,3 +59,18 @@ def test_core():
     assert out["moved"] == "bac" and out["removed"] == "ac"
     assert out["back"] == [{"id": "aaaaaaaaaaa", "title": "歌名"}, {"id": "ccccccccccc", "title": ""}]
     assert out["importLinks"] == ["dQw4w9WgXcQ"] and out["importJunk"] == ["dQw4w9WgXcQ"]
+
+
+def test_resume_target():
+    """切到別的 App、頁面被收掉重開：接著上次那一首、那一秒播。"""
+    if not shutil.which("node"):
+        return
+    js = """
+    const c=require(process.argv[1]);const st=c.newState();c.addSongs(st,["aaaaaaaaaaa","bbbbbbbbbbb"]);
+    const now=1e12,R=(p,d)=>c.resumeTarget(st,p,now,d);
+    const out=[R({id:"bbbbbbbbbbb",t:83.6,at:now-1000}),R({id:"aaaaaaaaaaa",t:1,at:now}),R({id:"ccccccccccc",t:5,at:now}),
+      R({id:"aaaaaaaaaaa",t:30,at:now-13*3600e3}),R({id:"aaaaaaaaaaa",t:198,at:now},200),R(null),R({id:"aaaaaaaaaaa",t:-1,at:now}),R({id:"aaaaaaaaaaa",t:"x",at:now})];
+    st.songs[1].bad=true;out.push(R({id:"bbbbbbbbbbb",t:10,at:now}));
+    console.log(JSON.stringify(out));"""
+    out = json.loads(subprocess.run(["node", "-e", js, str(ROOT / "core.js")], capture_output=True, text=True, check=True).stdout)
+    assert out == [{"index": 1, "start": 81}, {"index": 0, "start": 0}, None, None, None, None, None, None, None]

@@ -3,8 +3,13 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const KEY = "taco-playlist-v1";
+const POS_KEY = "taco-playlist-pos";   // 正在播哪一首、第幾秒（切 App 回來、頁面重開時接著播）
 const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
+let wasPlayingWhenHidden = false, hiddenAt = 0;   // 離開畫面那一刻正在播嗎、什麼時候離開的
+let stolenPause = false;   // 離開畫面後幾秒內就被暫停＝聲音被別的 App（YouTube 等）搶走：回來時自動接著播
+let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
+const STEAL_MS = 4000;
 const listQueue = [];   // 等著展開的 YouTube 播放清單
 
 function load() {
@@ -12,6 +17,25 @@ function load() {
   return newState();
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify({ songs: st.songs, shuffle: st.shuffle, repeat: st.repeat, order: st.order })); } catch (e) { /* 存不了就算了 */ } }
+function savePos() {
+  const s = st.songs[st.cur];
+  if (!ready || !s || playedId !== s.id || !player.getCurrentTime) return;
+  const d = player.getVideoData && player.getVideoData();
+  if (d && d.video_id && d.video_id !== s.id) return;   // 剛換歌、播放器還是上一首的秒數：先不記
+  try { localStorage.setItem(POS_KEY, JSON.stringify({ id: s.id, t: player.getCurrentTime() || 0, d: (player.getDuration && player.getDuration()) || 0, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
+}
+function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; }
+function clearPos() { try { localStorage.removeItem(POS_KEY); } catch (e) { /* 沒關係 */ } }
+function restorePos() {
+  let pos = null;
+  try { pos = JSON.parse(localStorage.getItem(POS_KEY)); } catch (e) { pos = null; }
+  const r = resumeTarget(st, pos, Date.now(), pos && pos.d);
+  if (!r) return;
+  st.cur = r.index;
+  player.cueVideoById({ videoId: st.songs[r.index].id, startSeconds: r.start });
+  render();
+  say(`接著上次的位置（${Math.floor(r.start / 60)}:${String(r.start % 60).padStart(2, "0")}），按 ▶ 繼續`);
+}
 function say(text, err) { const m = $("msg"); m.textContent = text; m.className = err ? "msg err" : "msg"; }
 
 /* ---------- 畫面 ---------- */
@@ -108,17 +132,22 @@ function playAt(i) {
   if (ready) player.loadVideoById(st.songs[i].id);
   render();
 }
-function stop() { if (ready) player.stopVideo(); playing = false; render(); }
+function stop() { if (ready) player.stopVideo(); playing = false; noAutoResume(); render(); }
 function step(d, auto) { playAt(nextIndex(st, d, auto)); }
 function onState(e) {
   const S = YT.PlayerState;
   if (e.data === S.PLAYING) {
     playing = true;
+    if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
     const s = st.songs[st.cur], d = player.getVideoData && player.getVideoData();
     if (s && d && d.title && s.title !== d.title) { s.title = d.title; save(); }
     if (s && s.bad) { delete s.bad; save(); }
-  } else if (e.data === S.PAUSED || e.data === S.CUED) playing = false;
-  else if (e.data === S.ENDED) { playing = false; step(1, true); return; }
+  } else if (e.data === S.PAUSED || e.data === S.CUED) {
+    // 離開畫面後馬上被暫停：多半是別的 App 搶走聲音；過了幾秒才暫停（通知列按暫停、拔耳機）就當成自己要停
+    if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) stolenPause = Date.now() - hiddenAt < STEAL_MS;
+    playing = false;
+  }
+  else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); step(1, true); return; }
   render();
 }
 function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌入：標記起來，自動跳下一首
@@ -131,7 +160,7 @@ function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌�
 window.onYouTubeIframeAPIReady = function () {
   const vars = { playsinline: 1, rel: 0, origin: location.origin };
   player = new YT.Player("yt", { width: "100%", height: "100%", playerVars: vars,
-    events: { onReady: () => { ready = true; }, onStateChange: onState, onError } });
+    events: { onReady: () => { ready = true; if (st.cur < 0) restorePos(); }, onStateChange: onState, onError } });
   resolver = new YT.Player("resolverYt", { width: 200, height: 200, playerVars: { origin: location.origin },
     events: { onReady: () => { resolverReady = true; resolveLists(); }, onStateChange: onResolverState } });
 };
@@ -151,7 +180,7 @@ function mediaSession(cur) {
     if (!mediaSession.set) {
       mediaSession.set = true;
       navigator.mediaSession.setActionHandler("play", () => ready && player.playVideo());
-      navigator.mediaSession.setActionHandler("pause", () => ready && player.pauseVideo());
+      navigator.mediaSession.setActionHandler("pause", () => { noAutoResume(); if (ready) player.pauseVideo(); });
       navigator.mediaSession.setActionHandler("previoustrack", () => step(-1));
       navigator.mediaSession.setActionHandler("nexttrack", () => step(1));
     }
@@ -169,7 +198,7 @@ $("paste").onclick = async () => {
 $("play").onclick = () => {
   if (!ready) { say("播放器還在載入，等一下再按", true); return; }
   if (st.cur < 0) { if (st.songs.length) playAt(nextIndex(st, 1)); return; }
-  if (playing) player.pauseVideo(); else player.playVideo();
+  if (playing) { noAutoResume(); player.pauseVideo(); } else player.playVideo();
 };
 $("prev").onclick = () => step(-1);
 $("next").onclick = () => step(1);
@@ -201,7 +230,15 @@ async function setWake(on) {
 }
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
-document.addEventListener("visibilitychange", () => { if (!document.hidden && wake && wake.released) setWake(true); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; hiddenAt = Date.now(); savePos(); return; }
+  if (wake && wake.released) setWake(true);
+  // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
+  if (stolenPause && ready && st.cur >= 0) setTimeout(() => { if (!playing && !document.hidden) player.playVideo(); }, 400);
+  noAutoResume();
+});
+window.addEventListener("pagehide", savePos);
+setInterval(() => { if (playing) savePos(); }, 3000);
 
 /* ---------- 安裝到桌面（PWA） ---------- */
 let installEvt = null;

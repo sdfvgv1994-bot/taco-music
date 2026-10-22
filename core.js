@@ -88,6 +88,18 @@ function nextIndex(st, step = 1, auto = false) {
   return -1;
 }
 
+/* ---------- 接著上次播：切到別的 App、頁面被瀏覽器收掉重開時用 ---------- */
+/* pos = {id, t, at}：哪一首、播到第幾秒、記錄時間（毫秒）。回傳 {index, start} 或 null。
+   歌已經被刪掉、記錄超過 12 小時、或幾乎播完（離結尾不到 5 秒）就不接 */
+function resumeTarget(st, pos, now = Date.now(), dur = 0) {
+  if (!pos || typeof pos.id !== "string" || !(pos.t >= 0)) return null;
+  if (!(pos.at > 0) || now - pos.at > 12 * 3600 * 1000) return null;
+  const index = st.songs.findIndex((s) => s.id === pos.id);
+  if (index < 0 || st.songs[index].bad) return null;
+  if (dur > 0 && pos.t > dur - 5) return null;
+  return { index, start: Math.max(0, Math.floor(pos.t) - 2) };   // 往回 2 秒，接得比較順
+}
+
 /* ---------- 備份碼：把歌單搬到另一支手機 ---------- */
 function exportCode(st) { return JSON.stringify({ app: "taco-playlist", v: 1, songs: st.songs.map((s) => [s.id, s.title || ""]) }); }
 /* 備份碼或一般連結都可以；回傳 [{id,title}] */
@@ -100,4 +112,4 @@ function importCode(text) {
   return parseAll(text).filter((r) => r.video).map((r) => ({ id: r.video, title: "" }));
 }
 
-if (typeof module !== "undefined") module.exports = { parseYouTube, parseAll, newState, addSongs, removeSong, moveSong, nextIndex, exportCode, importCode, shuffled };
+if (typeof module !== "undefined") module.exports = { parseYouTube, parseAll, newState, addSongs, removeSong, moveSong, nextIndex, exportCode, importCode, shuffled, resumeTarget };
