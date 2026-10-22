@@ -74,3 +74,23 @@ def test_resume_target():
     console.log(JSON.stringify(out));"""
     out = json.loads(subprocess.run(["node", "-e", js, str(ROOT / "core.js")], capture_output=True, text=True, check=True).stdout)
     assert out == [{"index": 1, "start": 81}, {"index": 0, "start": 0}, None, None, None, None, None, None, None]
+
+
+def test_should_auto_resume():
+    """切回歌單要不要自動接著播：被搶聲音才接；開關關掉、超過 30 分鐘、拔插耳機都不接。"""
+    if not shutil.which("node"):
+        return
+    js = """
+    const c=require(process.argv[1]);const now=1e12,S=(o)=>c.shouldAutoResume(o,now);
+    console.log(JSON.stringify([S({stolen:true,pausedAt:now-20e3}),S({stolen:true,pausedAt:now-20e3,autoResume:true}),
+      S({stolen:false,pausedAt:now-1}),S({stolen:true,pausedAt:now-1,autoResume:false}),S({stolen:true,pausedAt:now-31*60e3}),
+      S({stolen:true,pausedAt:now-1,deviceChanged:true}),S({stolen:true,pausedAt:0}),S(null)]));"""
+    out = json.loads(subprocess.run(["node", "-e", js, str(ROOT / "core.js")], capture_output=True, text=True, check=True).stdout)
+    assert out == [True, True, False, False, False, False, False, False]
+
+
+def test_auto_resume_setting_saved():
+    """「自動接播」開關會存進歌單設定；舊存檔沒有這欄時當成開。"""
+    app = (ROOT / "app.js").read_text(encoding="utf-8")
+    assert "autoResume: st.autoResume !== false" in app
+    assert 'id="auto"' in (ROOT / "index.html").read_text(encoding="utf-8")

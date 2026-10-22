@@ -6,8 +6,8 @@ const KEY = "taco-playlist-v1";
 const POS_KEY = "taco-playlist-pos";   // 正在播哪一首、第幾秒（切 App 回來、頁面重開時接著播）
 const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
-let wasPlayingWhenHidden = false, hiddenAt = 0;   // 離開畫面那一刻正在播嗎、什麼時候離開的
-let stolenPause = false;   // 在背景被暫停（多半是 YouTube 等 App 搶走聲音）：回來時自動接著播
+let wasPlayingWhenHidden = false;   // 離開畫面時（或在背景時）正在播
+let stolenPause = false, pausedAt = 0, deviceChanged = false;   // 在背景被暫停的時間；中間有沒有拔插耳機
 let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
 const listQueue = [];   // 等著展開的 YouTube 播放清單
 
@@ -23,7 +23,7 @@ function savePos() {
   if (d && d.video_id && d.video_id !== s.id) return;   // 剛換歌、播放器還是上一首的秒數：先不記
   try { localStorage.setItem(POS_KEY, JSON.stringify({ id: s.id, t: player.getCurrentTime() || 0, d: (player.getDuration && player.getDuration()) || 0, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
 }
-function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; }
+function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; deviceChanged = false; }
 function clearPos() { try { localStorage.removeItem(POS_KEY); } catch (e) { /* 沒關係 */ } }
 function restorePos() {
   let pos = null;
@@ -140,13 +140,14 @@ function onState(e) {
   if (e.data === S.PLAYING) {
     playing = true;
     if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
-    if (document.hidden) { wasPlayingWhenHidden = true; stolenPause = false; }   // 在背景（又）播起來了：之後被搶走聲音也要能接回來
+    if (document.hidden) { wasPlayingWhenHidden = true; stolenPause = false; deviceChanged = false; }
+    if (/按 ▶ 繼續播放/.test($("msg").textContent)) say("");   // 在背景（又）播起來了：之後被搶走聲音也要能接回來
     const s = st.songs[st.cur], d = player.getVideoData && player.getVideoData();
     if (s && d && d.title && s.title !== d.title) { s.title = d.title; save(); }
     if (s && s.bad) { delete s.bad; save(); }
   } else if (e.data === S.PAUSED || e.data === S.CUED) {
     // 在背景被暫停：多半是別的 App 搶走聲音（切去 YouTube 找影片、點開來播，常常超過好幾秒）。不想要的話關掉「自動接著播」
-    if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) stolenPause = true;
+    if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) { stolenPause = true; pausedAt = Date.now(); }
     playing = false;
   }
   else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); step(1, true); return; }
@@ -234,17 +235,23 @@ async function setWake(on) {
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; hiddenAt = Date.now(); savePos(); return; }
+  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; deviceChanged = false; savePos(); return; }
   if (wake && wake.released) setWake(true);
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
-  if (stolenPause && st.autoResume !== false && ready && st.cur >= 0) setTimeout(() => {
+  if (shouldAutoResume({ stolen: stolenPause, autoResume: st.autoResume, pausedAt, deviceChanged }) && ready && st.cur >= 0) setTimeout(() => {
     if (playing || document.hidden) return;
     player.playVideo();
-    setTimeout(() => { if (!playing && !document.hidden) say("按 ▶ 繼續播放"); }, 1500);   // 瀏覽器不讓自動播的話，提示一下
+    say("已自動接著播（不想要可以關掉「↩ 自動接播」）");
+    setTimeout(() => {   // 瀏覽器不讓自動播的話，提示一下（還在緩衝就不算）
+      const s = player.getPlayerState && player.getPlayerState();
+      if (!playing && !document.hidden && s !== YT.PlayerState.BUFFERING) say("按 ▶ 繼續播放");
+    }, 2500);
   }, 400);
   noAutoResume();
 });
 window.addEventListener("pagehide", savePos);
+// 拔插耳機（換了聲音裝置）：系統暫停的不要在回來時自動從喇叭播出來
+try { navigator.mediaDevices.addEventListener("devicechange", () => { if (document.hidden) deviceChanged = true; }); } catch (e) { /* 不支援就算了 */ }
 setInterval(() => { if (playing) savePos(); }, 3000);
 
 /* ---------- 安裝到桌面（PWA） ---------- */
