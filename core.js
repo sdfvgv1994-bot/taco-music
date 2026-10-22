@@ -100,6 +100,13 @@ function resumeTarget(st, pos, now = Date.now(), dur = 0) {
   return { index, start: Math.max(0, Math.floor(pos.t) - 2) };   // 往回 2 秒，接得比較順
 }
 
+/* 切回歌單時要不要自動接著播：
+   在背景被暫停（多半是 YouTube 等 App 搶走聲音）、自動接播開著、暫停不到 30 分鐘、中間沒有拔插耳機（換了聲音裝置）才接 */
+function shouldAutoResume(o, now = Date.now()) {
+  if (!o || !o.stolen || o.autoResume === false || o.deviceChanged) return false;
+  return o.pausedAt > 0 && now - o.pausedAt <= 30 * 60 * 1000;
+}
+
 /* ---------- 備份碼：把歌單搬到另一支手機 ---------- */
 function exportCode(st) { return JSON.stringify({ app: "taco-playlist", v: 1, songs: st.songs.map((s) => [s.id, s.title || ""]) }); }
 /* 備份碼或一般連結都可以；回傳 [{id,title}] */
@@ -112,4 +119,4 @@ function importCode(text) {
   return parseAll(text).filter((r) => r.video).map((r) => ({ id: r.video, title: "" }));
 }
 
-if (typeof module !== "undefined") module.exports = { parseYouTube, parseAll, newState, addSongs, removeSong, moveSong, nextIndex, exportCode, importCode, shuffled, resumeTarget };
+if (typeof module !== "undefined") module.exports = { parseYouTube, parseAll, newState, addSongs, removeSong, moveSong, nextIndex, exportCode, importCode, shuffled, resumeTarget, shouldAutoResume };
