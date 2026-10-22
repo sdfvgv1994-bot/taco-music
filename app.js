@@ -3,14 +3,16 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const KEY = "taco-playlist-v1";
-// 診斷用：網址加 ?off=dev,int,vis,hide（或 ?off=all）可以分別關掉背景相關功能，找出哪個讓背景停播
+// 背景時一律不碰播放器、不碰聲音裝置：Edge 實測只要在背景讀播放器秒數或監聽聲音裝置，就會把歌暫停（10/22 診斷）
+// 診斷用：網址加 ?off=all 關掉記位置和自動接播
 const OFF = new Set((new URLSearchParams(location.search).get("off") || "").split(",").filter(Boolean));
 const on = (k) => !OFF.has("all") && !OFF.has(k);
 const POS_KEY = "taco-playlist-pos";   // 正在播哪一首、第幾秒（切 App 回來、頁面重開時接著播）
 const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
 let wasPlayingWhenHidden = false;   // 離開畫面時（或在背景時）正在播
-let stolenPause = false, pausedAt = 0, deviceChanged = false;   // 在背景被暫停的時間；中間有沒有拔插耳機
+let stolenPause = false, pausedAt = 0;   // 在背景被暫停、什麼時候被暫停
+let lastPos = null;   // 前景時最後一次讀到的位置 {id, t, d, at}：切走那一刻用它推算，不在背景問播放器
 let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
 const listQueue = [];   // 等著展開的 YouTube 播放清單
 
@@ -19,14 +21,21 @@ function load() {
   return newState();
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify({ songs: st.songs, shuffle: st.shuffle, repeat: st.repeat, order: st.order, autoResume: st.autoResume !== false })); } catch (e) { /* 存不了就算了 */ } }
-function savePos() {
+/* 前景時讀播放器的位置（背景時不讀） */
+function readPos() {
   const s = st.songs[st.cur];
-  if (!ready || !s || playedId !== s.id || !player.getCurrentTime) return;
+  if (document.hidden || !ready || !s || playedId !== s.id || !player.getCurrentTime) return;
   const d = player.getVideoData && player.getVideoData();
   if (d && d.video_id && d.video_id !== s.id) return;   // 剛換歌、播放器還是上一首的秒數：先不記
-  try { localStorage.setItem(POS_KEY, JSON.stringify({ id: s.id, t: player.getCurrentTime() || 0, d: (player.getDuration && player.getDuration()) || 0, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
+  lastPos = { id: s.id, t: player.getCurrentTime() || 0, d: (player.getDuration && player.getDuration()) || 0, at: Date.now(), playing };
 }
-function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; deviceChanged = false; }
+/* 存位置：只用前景讀到的位置；還在播的話加上經過的時間推算 */
+function savePos() {
+  if (!lastPos || !st.songs[st.cur] || lastPos.id !== st.songs[st.cur].id) return;
+  const t = lastPos.t + (lastPos.playing ? (Date.now() - lastPos.at) / 1000 : 0);
+  try { localStorage.setItem(POS_KEY, JSON.stringify({ id: lastPos.id, t: lastPos.d ? Math.min(t, lastPos.d) : t, d: lastPos.d, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
+}
+function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; }
 function clearPos() { try { localStorage.removeItem(POS_KEY); } catch (e) { /* 沒關係 */ } }
 function restorePos() {
   let pos = null;
@@ -143,7 +152,10 @@ function onState(e) {
   if (e.data === S.PLAYING) {
     playing = true;
     if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
-    if (document.hidden) { wasPlayingWhenHidden = true; stolenPause = false; deviceChanged = false; }
+    if (document.hidden) {   // 在背景換到新歌或重播：不問播放器，從 0 秒開始推算，頁面被收掉重開也接得回來
+      wasPlayingWhenHidden = true; stolenPause = false;
+      if (st.songs[st.cur] && (!lastPos || lastPos.id !== st.songs[st.cur].id || lastPos.ended)) { lastPos = { id: st.songs[st.cur].id, t: 0, d: 0, at: Date.now(), playing: true }; savePos(); }
+    } else readPos();
     if (/按 ▶ 繼續播放/.test($("msg").textContent)) say("");   // 在背景（又）播起來了：之後被搶走聲音也要能接回來
     const s = st.songs[st.cur], d = player.getVideoData && player.getVideoData();
     if (s && d && d.title && s.title !== d.title) { s.title = d.title; save(); }
@@ -151,9 +163,10 @@ function onState(e) {
   } else if (e.data === S.PAUSED || e.data === S.CUED) {
     // 在背景被暫停：多半是別的 App 搶走聲音（切去 YouTube 找影片、點開來播，常常超過好幾秒）。不想要的話關掉「自動接著播」
     if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) { stolenPause = true; pausedAt = Date.now(); }
-    playing = false;
+    playing = false;   // 先標成沒在播，readPos 記下的位置才不會在暫停後一直往後加
+    readPos();
   }
-  else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); step(1, true); return; }
+  else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); if (lastPos) lastPos.ended = true; step(1, true); return; }
   render();
 }
 function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌入：標記起來，自動跳下一首
@@ -238,24 +251,25 @@ async function setWake(on) {
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
 if (on("vis")) document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; deviceChanged = false; savePos(); return; }
+  // 切走：只記旗標、存前景讀到的位置；不呼叫播放器
+  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; savePos(); return; }
   if (wake && wake.released) setWake(true);
+  readPos();   // 回到前景：校正一次位置
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
-  if (shouldAutoResume({ stolen: stolenPause, autoResume: st.autoResume, pausedAt, deviceChanged }) && ready && st.cur >= 0) setTimeout(() => {
+  if (shouldAutoResume({ stolen: stolenPause, autoResume: st.autoResume, pausedAt }) && ready && st.cur >= 0) setTimeout(() => {
     if (playing || document.hidden) return;
     player.playVideo();
     say("已自動接著播（不想要可以關掉「↩ 自動接播」）");
     setTimeout(() => {   // 瀏覽器不讓自動播的話，提示一下（還在緩衝就不算）
+      if (playing || document.hidden) return;   // 又切走了：不在背景問播放器
       const s = player.getPlayerState && player.getPlayerState();
-      if (!playing && !document.hidden && s !== YT.PlayerState.BUFFERING) say("按 ▶ 繼續播放");
+      if (s !== YT.PlayerState.BUFFERING) say("按 ▶ 繼續播放");
     }, 2500);
   }, 400);
   noAutoResume();
 });
-if (on("hide")) window.addEventListener("pagehide", savePos);
-// 拔插耳機（換了聲音裝置）：系統暫停的不要在回來時自動從喇叭播出來
-if (on("dev")) try { navigator.mediaDevices.addEventListener("devicechange", () => { if (document.hidden) deviceChanged = true; }); } catch (e) { /* 不支援就算了 */ }
-if (on("int")) setInterval(() => { if (playing) savePos(); }, 3000);
+// 前景播放時每 3 秒讀一次位置、存起來（背景時 readPos 什麼都不做）
+if (on("int")) setInterval(() => { if (playing && !document.hidden) { readPos(); savePos(); } }, 3000);
 
 /* ---------- 安裝到桌面（PWA） ---------- */
 let installEvt = null;

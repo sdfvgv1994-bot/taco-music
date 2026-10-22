@@ -101,9 +101,9 @@ function resumeTarget(st, pos, now = Date.now(), dur = 0) {
 }
 
 /* 切回歌單時要不要自動接著播：
-   在背景被暫停（多半是 YouTube 等 App 搶走聲音）、自動接播開著、暫停不到 30 分鐘、中間沒有拔插耳機（換了聲音裝置）才接 */
+   在背景被暫停（多半是 YouTube 等 App 搶走聲音）、自動接播開著、暫停不到 30 分鐘才接 */
 function shouldAutoResume(o, now = Date.now()) {
-  if (!o || !o.stolen || o.autoResume === false || o.deviceChanged) return false;
+  if (!o || !o.stolen || o.autoResume === false) return false;
   return o.pausedAt > 0 && now - o.pausedAt <= 30 * 60 * 1000;
 }
 

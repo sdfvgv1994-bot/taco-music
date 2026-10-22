@@ -77,16 +77,16 @@ def test_resume_target():
 
 
 def test_should_auto_resume():
-    """切回歌單要不要自動接著播：被搶聲音才接；開關關掉、超過 30 分鐘、拔插耳機都不接。"""
+    """切回歌單要不要自動接著播：被搶聲音才接；開關關掉、超過 30 分鐘都不接。"""
     if not shutil.which("node"):
         return
     js = """
     const c=require(process.argv[1]);const now=1e12,S=(o)=>c.shouldAutoResume(o,now);
     console.log(JSON.stringify([S({stolen:true,pausedAt:now-20e3}),S({stolen:true,pausedAt:now-20e3,autoResume:true}),
       S({stolen:false,pausedAt:now-1}),S({stolen:true,pausedAt:now-1,autoResume:false}),S({stolen:true,pausedAt:now-31*60e3}),
-      S({stolen:true,pausedAt:now-1,deviceChanged:true}),S({stolen:true,pausedAt:0}),S(null)]));"""
+      S({stolen:true,pausedAt:0}),S(null)]));"""
     out = json.loads(subprocess.run(["node", "-e", js, str(ROOT / "core.js")], capture_output=True, text=True, check=True).stdout)
-    assert out == [True, True, False, False, False, False, False, False]
+    assert out == [True, True, False, False, False, False, False]
 
 
 def test_auto_resume_setting_saved():
