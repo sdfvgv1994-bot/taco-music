@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="app-version" content="dev">
+<meta name="app-built" content="">
+<meta name="theme-color" content="#1b1530">
+<meta name="description" content="把喜歡的 YouTube 歌收成歌單，用 YouTube 官方播放器連續播放。">
+<title>taco 歌單</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="taco歌單">
+<style>
+:root{--bg:#f4f1fb;--card:#fff;--ink:#231c3a;--sub:#6d6585;--line:#e2dcf0;--accent:#7b4dff;--accent-ink:#fff;--warn:#d0453a;--now:#efe8ff}
+@media (prefers-color-scheme:dark){:root{--bg:#141022;--card:#1f1933;--ink:#f1edff;--sub:#a59dc0;--line:#332a4d;--accent:#9d7bff;--accent-ink:#140e26;--warn:#ff7a6e;--now:#2c2348}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}
+body{padding:max(12px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:640px;margin:0 auto}
+header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+header h1{font-size:20px;margin:0;flex:1}
+button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;touch-action:manipulation}
+button:active{transform:scale(.97)}
+button.main{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button.on{background:var(--now);border-color:var(--accent);color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px}
+.video{position:relative;width:100%;aspect-ratio:16/9;min-height:200px;background:#000;border-radius:10px;overflow:hidden}
+.video>div,.video iframe{position:absolute;inset:0;width:100%;height:100%}
+.empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px;color:#e4dcff;text-align:center;padding:0 16px 14px;font-size:14px;background:radial-gradient(circle at 50% 38%,#5a3fa8 0,transparent 55%),linear-gradient(160deg,#2a1f4f,#120d22)}
+.empty .art{position:absolute;left:0;top:4%;width:100%;height:74%}
+.empty span{position:relative;text-shadow:0 1px 3px #000}
+.disc{transform-origin:160px 84px;animation:spin 6s linear infinite}
+.n1,.n2,.n3{animation:float 3.2s ease-in-out infinite}.n2{animation-delay:-1.1s}.n3{animation-delay:-2.1s}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes float{0%,100%{transform:translateY(0);opacity:.9}50%{transform:translateY(-7px);opacity:.55}}
+@media (prefers-reduced-motion:reduce){.disc,.n1,.n2,.n3{animation:none}}
+.now{margin:10px 2px 8px;font-weight:600;min-height:1.45em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctrl{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.ctrl button{min-width:64px;font-size:18px}
+.ctrl .mode{font-size:14px}
+.add{display:flex;gap:8px}
+.add textarea{flex:1;min-width:0;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;resize:vertical;min-height:44px}
+.msg{font-size:14px;color:var(--sub);margin:6px 2px 0;min-height:1.2em}
+.msg.err{color:var(--warn)}
+.listhead{display:flex;align-items:center;justify-content:space-between;margin:0 2px 6px;color:var(--sub);font-size:14px}
+ol{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px}
+li.cur{background:var(--now)}
+li img{width:64px;height:36px;object-fit:cover;border-radius:6px;background:#000;flex:none}
+li .t{flex:1;min-width:0;cursor:pointer}
+li .t b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+li .t small{color:var(--sub)}
+li.bad .t small{color:var(--warn)}
+li .ops{display:flex;gap:4px;flex:none}
+li .ops button{padding:4px 8px;font-size:14px}
+details summary{cursor:pointer;color:var(--sub);font-size:14px}
+details textarea{width:100%;min-height:80px;margin:8px 0;font:13px/1.4 ui-monospace,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.note{font-size:13px;color:var(--sub)}
+.ver{text-align:center;font-size:12px;color:var(--sub);margin-top:12px}
+#resolver{position:fixed;left:-400px;top:0;width:200px;height:200px;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🎵 taco 歌單</h1>
+    <button id="install" hidden>安裝到桌面</button>
+  </header>
+
+  <section class="card">
+    <div class="video"><div id="yt"></div><div class="empty" id="empty">
+      <svg class="art" viewBox="0 0 320 180" aria-hidden="true">
+        <defs><radialGradient id="glow" cx="50%" cy="45%" r="60%"><stop offset="0" stop-color="#9d7bff" stop-opacity=".55"/><stop offset="1" stop-color="#9d7bff" stop-opacity="0"/></radialGradient>
+          <linearGradient id="lab" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffb86b"/><stop offset="1" stop-color="#ff6fae"/></linearGradient></defs>
+
+        <g class="disc"><circle cx="160" cy="84" r="58" fill="#0d0a18"/>
+          <circle cx="160" cy="84" r="50" fill="none" stroke="#2c2448" stroke-width="1.5"/><circle cx="160" cy="84" r="42" fill="none" stroke="#2c2448" stroke-width="1.5"/>
+          <circle cx="160" cy="84" r="34" fill="none" stroke="#2c2448" stroke-width="1.5"/>
+          <path d="M118 52 A52 52 0 0 1 152 33" fill="none" stroke="#ffffff" stroke-opacity=".25" stroke-width="3" stroke-linecap="round"/>
+          <circle cx="160" cy="84" r="19" fill="url(#lab)"/><circle cx="160" cy="84" r="3.5" fill="#0d0a18"/></g>
+        <path d="M222 44 h4 v26 a7 6 0 1 1 -4 -5 z" class="n1" fill="#c9b6ff"/>
+        <path d="M84 56 h3 v20 a6 5 0 1 1 -3 -4.5 z M87 56 l14 -4 v4 l-14 4 z" class="n2" fill="#ffb86b"/>
+        <path d="M246 92 h3 v16 a5 4.5 0 1 1 -3 -4 z" class="n3" fill="#ff8fc0"/>
+      </svg>
+      <span id="emptyText">貼上 YouTube 連結加入歌單，<br>點一首歌就開始播放</span>
+    </div></div>
+    <div class="now" id="now"></div>
+    <div class="ctrl">
+      <button id="prev" aria-label="上一首">⏮</button>
+      <button id="play" class="main" aria-label="播放／暫停">▶</button>
+      <button id="next" aria-label="下一首">⏭</button>
+    </div>
+    <div class="ctrl" style="margin-top:8px">
+      <button id="shuffle" class="mode" aria-label="隨機播放">🔀 隨機</button>
+      <button id="repeat" class="mode" aria-label="循環模式">🔁 全部循環</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="add">
+      <textarea id="link" rows="2" placeholder="貼上 YouTube 影片或播放清單連結（可以一次貼很多個）"></textarea>
+      <button id="addBtn" class="main">加入</button>
+    </div>
+    <div class="row" style="margin-top:8px"><button id="paste">📋 貼上剪貼簿</button></div>
+    <p class="msg" id="msg"></p>
+  </section>
+
+  <section class="card">
+    <div class="listhead"><span id="count">歌單是空的</span><button id="clear" hidden>清空</button></div>
+    <ol id="list"></ol>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>備份／搬到另一支手機</summary>
+      <p class="note">歌單只存在這台裝置的瀏覽器裡。複製備份碼，貼到另一支手機的「匯入」就能搬過去。</p>
+      <textarea id="code" readonly></textarea>
+      <div class="row"><button id="copy">複製備份碼</button></div>
+      <textarea id="importText" placeholder="把備份碼（或一堆 YouTube 連結）貼在這裡"></textarea>
+      <div class="row"><button id="importBtn" class="main">匯入</button></div>
+    </details>
+    <details style="margin-top:10px">
+      <summary>小提醒</summary>
+      <p class="note">歌曲都用 YouTube 官方播放器播放，不下載任何檔案，所以需要網路。有些影片的上傳者不開放嵌入播放，這種歌會標成「無法播放」並自動跳過。
+        手機鎖螢幕或切到別的 App 時，瀏覽器通常會停止播放；可以打開下面的「螢幕保持亮著」。</p>
+      <div class="row"><button id="wake">💡 螢幕保持亮著：關</button></div>
+    </details>
+  </section>
+  <p class="ver" id="ver"></p>
+</main>
+<div id="resolver"><div id="resolverYt"></div></div>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

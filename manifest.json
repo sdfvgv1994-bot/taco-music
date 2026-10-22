@@ -1,0 +1,16 @@
+{
+  "name": "taco 歌單",
+  "short_name": "taco歌單",
+  "description": "把喜歡的 YouTube 歌收成歌單，用 YouTube 官方播放器連續播放。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1b1530",
+  "theme_color": "#1b1530",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
