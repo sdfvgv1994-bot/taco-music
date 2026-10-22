@@ -12,6 +12,15 @@ const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
 let wasPlayingWhenHidden = false;   // 離開畫面時（或在背景時）正在播
 let stolenPause = false, pausedAt = 0;   // 在背景被暫停、什麼時候被暫停
+let bgWant = false, bgTries = 0, bgTimer = 0;   // 背景播完換到下一首，等著它播起來；重試了幾次
+const bgLog = [];   // 背景時發生了什麼（除錯用，只放在記憶體，回到前景顯示在「小提醒」裡）
+const STATE_NAME = { "-1": "還沒開始", 0: "播完", 1: "播放中", 2: "暫停", 3: "緩衝中", 5: "準備好了" };
+function blog(msg) {
+  if (!document.hidden) return;
+  const d = new Date();
+  bgLog.push(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")} ${msg}`);
+  if (bgLog.length > 40) bgLog.shift();
+}
 let lastPos = null;   // 前景時最後一次讀到的位置 {id, t, d, at}：切走那一刻用它推算，不在背景問播放器
 let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
 const listQueue = [];   // 等著展開的 YouTube 播放清單
@@ -35,7 +44,7 @@ function savePos() {
   const t = lastPos.t + (lastPos.playing ? (Date.now() - lastPos.at) / 1000 : 0);
   try { localStorage.setItem(POS_KEY, JSON.stringify({ id: lastPos.id, t: lastPos.d ? Math.min(t, lastPos.d) : t, d: lastPos.d, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
 }
-function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; }
+function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; bgWant = false; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; }
 function clearPos() { try { localStorage.removeItem(POS_KEY); } catch (e) { /* 沒關係 */ } }
 function restorePos() {
   let pos = null;
@@ -149,8 +158,15 @@ function stop() { if (ready) player.stopVideo(); playing = false; noAutoResume()
 function step(d, auto) { playAt(nextIndex(st, d, auto)); }
 function onState(e) {
   const S = YT.PlayerState;
+  blog(`播放器：${STATE_NAME[e.data] ?? e.data}`);
+  // 背景播完換到下一首，瀏覽器卻沒讓新歌播起來：等一下再按一次播放（最多 3 次）
+  if (bgWant && document.hidden && (e.data === S.PAUSED || e.data === S.CUED || e.data === S.UNSTARTED) && !bgTimer && bgTries < 3) {
+    const n = ++bgTries;
+    bgTimer = setTimeout(() => { bgTimer = 0; if (bgWant && !playing && document.hidden) { blog(`重試播放 #${n}`); player.playVideo(); } }, 1500 * n);
+  }
   if (e.data === S.PLAYING) {
     playing = true;
+    if (bgWant) { blog("新歌播起來了"); bgWant = false; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; }
     if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
     if (document.hidden) {   // 在背景換到新歌或重播：不問播放器，從 0 秒開始推算，頁面被收掉重開也接得回來
       wasPlayingWhenHidden = true; stolenPause = false;
@@ -166,12 +182,17 @@ function onState(e) {
     playing = false;   // 先標成沒在播，readPos 記下的位置才不會在暫停後一直往後加
     readPos();
   }
-  else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); if (lastPos) lastPos.ended = true; step(1, true); return; }
+  else if (e.data === S.ENDED) {
+    playing = false; noAutoResume(); clearPos(); if (lastPos) lastPos.ended = true;
+    if (document.hidden) { bgWant = true; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; blog("播完，換下一首"); }   // stop()（不循環播到最後）會把 bgWant 清掉
+    step(1, true); return;
+  }
   render();
 }
 function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌入：標記起來，自動跳下一首
   const s = st.songs[st.cur];
   if (s) { s.bad = true; save(); }
+  if (document.hidden) { bgWant = true; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; blog("這首無法播放，換下一首"); }
   playing = false; render();
   setTimeout(() => step(1, true), 800);
 }
@@ -250,10 +271,22 @@ async function setWake(on) {
 }
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
+function showBgLog() {
+  const el = $("bglog");
+  if (!el) return;
+  el.textContent = bgLog.length ? "上次在背景發生的事（除錯用）：\n" + bgLog.join("\n") : "";
+  el.hidden = !bgLog.length;
+}
 if (on("vis")) document.addEventListener("visibilitychange", () => {
   // 切走：只記旗標、存前景讀到的位置；不呼叫播放器
-  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; savePos(); return; }
+  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; bgLog.length = 0; blog(playing ? "切到背景（播放中）" : "切到背景（沒在播）"); savePos(); return; }
   if (wake && wake.released) setWake(true);
+  showBgLog();
+  // 背景換到下一首但沒播起來：回來時直接幫你播（自動接播關掉就不動）
+  if (bgWant && !playing && st.autoResume !== false && ready && st.cur >= 0) {
+    setTimeout(() => { if (!playing && !document.hidden) { player.playVideo(); say("背景換歌時瀏覽器沒讓它播，已幫你接著播"); } }, 400);
+    noAutoResume(); return;
+  }
   readPos();   // 回到前景：校正一次位置
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
   if (shouldAutoResume({ stolen: stolenPause, autoResume: st.autoResume, pausedAt }) && ready && st.cur >= 0) setTimeout(() => {
