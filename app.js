@@ -12,6 +12,17 @@ const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
 let wasPlayingWhenHidden = false;   // 離開畫面時（或在背景時）正在播
 let stolenPause = false, pausedAt = 0;   // 在背景被暫停、什麼時候被暫停
+let bgWant = false, bgTries = 0, bgTimer = 0, bgAt = 0;   // bgAt：背景換歌的時間（回來補播只在 30 分鐘內）
+let lastState = null, fgTimer = 0;   // lastState：播放器最後回報的狀態（自己記，不用問播放器）；fgTimer：回前景補播的計時器
+const BGLOG_KEY = "taco-playlist-bglog";   // 背景播完換到下一首，等著它播起來；重試了幾次
+const bgLog = [];   // 背景時發生了什麼（除錯用，只放在記憶體，回到前景顯示在「小提醒」裡）
+const STATE_NAME = { "-1": "還沒開始", 0: "播完", 1: "播放中", 2: "暫停", 3: "緩衝中", 5: "準備好了" };
+function blog(msg) {
+  if (!document.hidden) return;
+  const d = new Date();
+  bgLog.push(`${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")} ${msg}`);
+  if (bgLog.length > 40) bgLog.shift();
+}
 let lastPos = null;   // 前景時最後一次讀到的位置 {id, t, d, at}：切走那一刻用它推算，不在背景問播放器
 let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
 const listQueue = [];   // 等著展開的 YouTube 播放清單
@@ -35,7 +46,15 @@ function savePos() {
   const t = lastPos.t + (lastPos.playing ? (Date.now() - lastPos.at) / 1000 : 0);
   try { localStorage.setItem(POS_KEY, JSON.stringify({ id: lastPos.id, t: lastPos.d ? Math.min(t, lastPos.d) : t, d: lastPos.d, at: Date.now() })); } catch (e) { /* 存不了就算了 */ }
 }
-function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; }
+function noAutoResume() { wasPlayingWhenHidden = false; stolenPause = false; pausedAt = 0; bgWant = false; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; }
+/* 背景換到下一首：記下時間，排第一次檢查；之後由計時器自己排下一次（不靠播放器有沒有回報狀態） */
+function bgAdvance(why) { bgWant = true; bgTries = 0; bgAt = Date.now(); clearTimeout(bgTimer); bgTimer = setTimeout(bgRetry, 1500); blog(why); }
+function bgRetry() {
+  bgTimer = 0;
+  if (!bgWant || playing || !document.hidden || bgTries >= 3 || Date.now() - bgAt > 20000) return;   // 最多重試 3 次、20 秒內
+  if (lastState !== YT.PlayerState.BUFFERING) { bgTries++; blog(`重試播放 #${bgTries}`); player.playVideo(); }   // 還在緩衝就先等
+  if (bgTries < 3) bgTimer = setTimeout(bgRetry, 1500 * (bgTries + 1));
+}
 function clearPos() { try { localStorage.removeItem(POS_KEY); } catch (e) { /* 沒關係 */ } }
 function restorePos() {
   let pos = null;
@@ -145,12 +164,15 @@ function playAt(i) {
   if (ready) player.loadVideoById(st.songs[i].id);
   render();
 }
-function stop() { if (ready) player.stopVideo(); playing = false; noAutoResume(); render(); }
+function stop() { if (ready) player.stopVideo(); playing = false; noAutoResume(); clearTimeout(fgTimer); fgTimer = 0; render(); }
 function step(d, auto) { playAt(nextIndex(st, d, auto)); }
 function onState(e) {
   const S = YT.PlayerState;
+  lastState = e.data;
+  blog(`播放器：${STATE_NAME[e.data] ?? e.data}`);
   if (e.data === S.PLAYING) {
     playing = true;
+    if (bgWant) { blog("新歌播起來了"); bgWant = false; bgTries = 0; clearTimeout(bgTimer); bgTimer = 0; }
     if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
     if (document.hidden) {   // 在背景換到新歌或重播：不問播放器，從 0 秒開始推算，頁面被收掉重開也接得回來
       wasPlayingWhenHidden = true; stolenPause = false;
@@ -166,14 +188,21 @@ function onState(e) {
     playing = false;   // 先標成沒在播，readPos 記下的位置才不會在暫停後一直往後加
     readPos();
   }
-  else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); if (lastPos) lastPos.ended = true; step(1, true); return; }
+  else if (e.data === S.ENDED) {
+    playing = false; noAutoResume(); clearPos(); if (lastPos) lastPos.ended = true;
+    if (document.hidden) bgAdvance("播完，換下一首");   // stop()（不循環播到最後）會把 bgWant 清掉
+    step(1, true); return;
+  }
   render();
 }
+let errTimer = 0;
 function onError() {   // 100 影片被刪除、101／150 上傳者不開放嵌入：標記起來，自動跳下一首
+  if (errTimer) return;   // 同一首報錯兩次：只換一次歌，免得跳過下一首
   const s = st.songs[st.cur];
   if (s) { s.bad = true; save(); }
+  if (document.hidden) bgAdvance("這首無法播放，換下一首");
   playing = false; render();
-  setTimeout(() => step(1, true), 800);
+  errTimer = setTimeout(() => { errTimer = 0; step(1, true); }, 800);
 }
 
 window.onYouTubeIframeAPIReady = function () {
@@ -198,10 +227,10 @@ function mediaSession(cur) {
       artwork: [{ src: `https://i.ytimg.com/vi/${cur.id}/hqdefault.jpg`, sizes: "480x360", type: "image/jpeg" }] }) : null;
     if (!mediaSession.set) {
       mediaSession.set = true;
-      navigator.mediaSession.setActionHandler("play", () => ready && player.playVideo());
-      navigator.mediaSession.setActionHandler("pause", () => { noAutoResume(); if (ready) player.pauseVideo(); });
-      navigator.mediaSession.setActionHandler("previoustrack", () => step(-1));
-      navigator.mediaSession.setActionHandler("nexttrack", () => step(1));
+      navigator.mediaSession.setActionHandler("play", () => { blog("通知列：播放"); if (ready) player.playVideo(); });
+      navigator.mediaSession.setActionHandler("pause", () => { blog("通知列：暫停"); noAutoResume(); if (ready) player.pauseVideo(); });
+      navigator.mediaSession.setActionHandler("previoustrack", () => { blog("通知列：上一首"); step(-1); if (document.hidden && st.cur >= 0) bgAdvance("（等上一首播起來）"); });
+      navigator.mediaSession.setActionHandler("nexttrack", () => { blog("通知列：下一首"); step(1); if (document.hidden && st.cur >= 0) bgAdvance("（等下一首播起來）"); });
     }
   } catch (e) { /* 不支援就算了 */ }
 }
@@ -250,10 +279,34 @@ async function setWake(on) {
 }
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
+/* 背景紀錄：回到前景時才存（背景時不寫入），頁面被收掉重開也看得到上一次的 */
+function keepBgLog() { if (bgLog.length > 2) try { localStorage.setItem(BGLOG_KEY, JSON.stringify(bgLog)); } catch (e) { /* 存不了就算了 */ } }
+function showBgLog() {
+  const el = $("bglog");
+  if (!el) return;
+  let lines = bgLog.length > 2 ? bgLog : null;
+  if (!lines) try { lines = JSON.parse(localStorage.getItem(BGLOG_KEY)); } catch (e) { lines = null; }
+  if (!Array.isArray(lines)) lines = [];
+  el.textContent = lines.length ? "上次在背景發生的事（除錯用）：\n" + lines.slice(-40).map(String).join("\n") : "";
+  el.hidden = !lines.length;
+}
 if (on("vis")) document.addEventListener("visibilitychange", () => {
   // 切走：只記旗標、存前景讀到的位置；不呼叫播放器
-  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; savePos(); return; }
+  if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; bgLog.length = 0; blog(playing ? "切到背景（播放中）" : "切到背景（沒在播）"); savePos(); return; }
   if (wake && wake.released) setWake(true);
+  blog("回到前景"); keepBgLog(); showBgLog();
+  // 背景換到下一首但沒播起來：回來時直接幫你播（30 分鐘內、自動接播開著、這首不是壞歌）
+  const want = st.songs[st.cur];
+  if (bgWant && !playing && ready && want && !want.bad && shouldAutoResume({ stolen: true, autoResume: st.autoResume, pausedAt: bgAt })) {
+    clearTimeout(fgTimer);
+    fgTimer = setTimeout(() => {
+      fgTimer = 0;
+      if (playing || document.hidden || st.songs[st.cur] !== want) return;   // 這 0.4 秒內刪歌、清空、換歌就不播
+      player.playVideo(); say("背景換歌時瀏覽器沒讓它播，已幫你接著播");
+      setTimeout(() => { if (!playing && !document.hidden) say("按 ▶ 繼續播放"); }, 2500);
+    }, 400);
+    noAutoResume(); return;
+  }
   readPos();   // 回到前景：校正一次位置
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
   if (shouldAutoResume({ stolen: stolenPause, autoResume: st.autoResume, pausedAt }) && ready && st.cur >= 0) setTimeout(() => {
@@ -283,4 +336,5 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 })();
 
 render();
+showBgLog();
 fetchTitles();

@@ -58,6 +58,7 @@ li.bad .t small{color:var(--warn)}
 li .ops{display:flex;gap:4px;flex:none}
 li .ops button{padding:4px 8px;font-size:14px}
 details summary{cursor:pointer;color:var(--sub);font-size:14px}
+#bglog{white-space:pre-wrap;font:12px/1.5 ui-monospace,monospace;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px;margin:8px 0 0;max-height:240px;overflow:auto}
 details textarea{width:100%;min-height:80px;margin:8px 0;font:13px/1.4 ui-monospace,monospace;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 .note{font-size:13px;color:var(--sub)}
@@ -130,6 +131,7 @@ details textarea{width:100%;min-height:80px;margin:8px 0;font:13px/1.4 ui-monosp
       <p class="note">歌曲都用 YouTube 官方播放器播放，不下載任何檔案，所以需要網路。有些影片的上傳者不開放嵌入播放，這種歌會標成「無法播放」並自動跳過。
         Android 手機推薦用 <b>Edge</b> 開（加到主畫面），鎖螢幕也會繼續播；其他瀏覽器在鎖螢幕或切到別的 App 時通常會停止播放，可以打開下面的「螢幕保持亮著」。</p>
       <div class="row"><button id="wake">💡 螢幕保持亮著：關</button></div>
+      <pre id="bglog" class="note" hidden></pre>
     </details>
   </section>
   <p class="ver" id="ver"></p>
