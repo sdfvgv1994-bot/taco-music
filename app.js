@@ -3,6 +3,9 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const KEY = "taco-playlist-v1";
+// 診斷用：網址加 ?off=dev,int,vis,hide（或 ?off=all）可以分別關掉背景相關功能，找出哪個讓背景停播
+const OFF = new Set((new URLSearchParams(location.search).get("off") || "").split(",").filter(Boolean));
+const on = (k) => !OFF.has("all") && !OFF.has(k);
 const POS_KEY = "taco-playlist-pos";   // 正在播哪一首、第幾秒（切 App 回來、頁面重開時接著播）
 const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
@@ -234,7 +237,7 @@ async function setWake(on) {
 }
 function showWake() { $("wake").textContent = `💡 螢幕保持亮著：${wake ? "開" : "關"}`; $("wake").classList.toggle("on", !!wake); }
 $("wake").onclick = () => setWake(!wake);
-document.addEventListener("visibilitychange", () => {
+if (on("vis")) document.addEventListener("visibilitychange", () => {
   if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; pausedAt = 0; deviceChanged = false; savePos(); return; }
   if (wake && wake.released) setWake(true);
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
@@ -249,10 +252,10 @@ document.addEventListener("visibilitychange", () => {
   }, 400);
   noAutoResume();
 });
-window.addEventListener("pagehide", savePos);
+if (on("hide")) window.addEventListener("pagehide", savePos);
 // 拔插耳機（換了聲音裝置）：系統暫停的不要在回來時自動從喇叭播出來
-try { navigator.mediaDevices.addEventListener("devicechange", () => { if (document.hidden) deviceChanged = true; }); } catch (e) { /* 不支援就算了 */ }
-setInterval(() => { if (playing) savePos(); }, 3000);
+if (on("dev")) try { navigator.mediaDevices.addEventListener("devicechange", () => { if (document.hidden) deviceChanged = true; }); } catch (e) { /* 不支援就算了 */ }
+if (on("int")) setInterval(() => { if (playing) savePos(); }, 3000);
 
 /* ---------- 安裝到桌面（PWA） ---------- */
 let installEvt = null;
@@ -262,7 +265,7 @@ if ("serviceWorker" in navigator && location.protocol === "https:") navigator.se
 
 (function version() {
   const v = document.querySelector('meta[name="app-version"]').content, b = document.querySelector('meta[name="app-built"]').content;
-  $("ver").textContent = `版本 ${v}${b ? "（" + b + "）" : ""}`;
+  $("ver").textContent = `版本 ${v}${b ? "（" + b + "）" : ""}` + (OFF.size ? `・診斷模式：關掉 ${[...OFF].join("、")}` : "");
 })();
 
 render();
