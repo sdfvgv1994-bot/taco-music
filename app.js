@@ -7,16 +7,15 @@ const POS_KEY = "taco-playlist-pos";   // 正在播哪一首、第幾秒（切 A
 const st = load();
 let player = null, ready = false, playing = false, resolver = null, resolverReady = false;
 let wasPlayingWhenHidden = false, hiddenAt = 0;   // 離開畫面那一刻正在播嗎、什麼時候離開的
-let stolenPause = false;   // 離開畫面後幾秒內就被暫停＝聲音被別的 App（YouTube 等）搶走：回來時自動接著播
+let stolenPause = false;   // 在背景被暫停（多半是 YouTube 等 App 搶走聲音）：回來時自動接著播
 let playedId = null;       // 播放器真的播過哪一首（只準備好、還沒播的不算，免得把記下的秒數洗成 0）
-const STEAL_MS = 4000;
 const listQueue = [];   // 等著展開的 YouTube 播放清單
 
 function load() {
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.songs)) return Object.assign(newState(), d, { cur: -1 }); } catch (e) { /* 沒存檔或瀏覽器不給存 */ }
   return newState();
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify({ songs: st.songs, shuffle: st.shuffle, repeat: st.repeat, order: st.order })); } catch (e) { /* 存不了就算了 */ } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify({ songs: st.songs, shuffle: st.shuffle, repeat: st.repeat, order: st.order, autoResume: st.autoResume !== false })); } catch (e) { /* 存不了就算了 */ } }
 function savePos() {
   const s = st.songs[st.cur];
   if (!ready || !s || playedId !== s.id || !player.getCurrentTime) return;
@@ -70,6 +69,8 @@ function render() {
   $("shuffle").classList.toggle("on", st.shuffle);
   $("repeat").textContent = REPEAT[st.repeat];
   $("repeat").classList.toggle("on", st.repeat !== "off");
+  $("auto").textContent = `↩ 自動接播：${st.autoResume !== false ? "開" : "關"}`;
+  $("auto").classList.toggle("on", st.autoResume !== false);
   $("code").value = exportCode(st);
   mediaSession(cur);
 }
@@ -139,12 +140,13 @@ function onState(e) {
   if (e.data === S.PLAYING) {
     playing = true;
     if (st.songs[st.cur]) playedId = st.songs[st.cur].id;
+    if (document.hidden) { wasPlayingWhenHidden = true; stolenPause = false; }   // 在背景（又）播起來了：之後被搶走聲音也要能接回來
     const s = st.songs[st.cur], d = player.getVideoData && player.getVideoData();
     if (s && d && d.title && s.title !== d.title) { s.title = d.title; save(); }
     if (s && s.bad) { delete s.bad; save(); }
   } else if (e.data === S.PAUSED || e.data === S.CUED) {
-    // 離開畫面後馬上被暫停：多半是別的 App 搶走聲音；過了幾秒才暫停（通知列按暫停、拔耳機）就當成自己要停
-    if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) stolenPause = Date.now() - hiddenAt < STEAL_MS;
+    // 在背景被暫停：多半是別的 App 搶走聲音（切去 YouTube 找影片、點開來播，常常超過好幾秒）。不想要的話關掉「自動接著播」
+    if (e.data === S.PAUSED && document.hidden && wasPlayingWhenHidden) stolenPause = true;
     playing = false;
   }
   else if (e.data === S.ENDED) { playing = false; noAutoResume(); clearPos(); step(1, true); return; }
@@ -203,6 +205,7 @@ $("play").onclick = () => {
 $("prev").onclick = () => step(-1);
 $("next").onclick = () => step(1);
 $("shuffle").onclick = () => { st.shuffle = !st.shuffle; st.order = st.shuffle ? shuffled(st.songs.length, st.cur) : []; save(); render(); };
+$("auto").onclick = () => { st.autoResume = st.autoResume === false; save(); render(); say(st.autoResume ? "切到別的 App 被暫停，回來會自動接著播" : "切回來不會自動接著播"); };
 $("repeat").onclick = () => { st.repeat = { all: "one", one: "off", off: "all" }[st.repeat]; save(); render(); };
 $("clear").onclick = () => { if (!confirm("確定清空整個歌單？")) return; stop(); st.songs = []; st.cur = -1; st.order = []; save(); render(); };
 $("copy").onclick = async () => {
@@ -234,7 +237,11 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) { wasPlayingWhenHidden = playing; stolenPause = false; hiddenAt = Date.now(); savePos(); return; }
   if (wake && wake.released) setWake(true);
   // 切到 YouTube 等 App 時聲音被搶走、播放器被暫停：回來後自動接著播（離開前就暫停、或在背景自己按暫停的不動它）
-  if (stolenPause && ready && st.cur >= 0) setTimeout(() => { if (!playing && !document.hidden) player.playVideo(); }, 400);
+  if (stolenPause && st.autoResume !== false && ready && st.cur >= 0) setTimeout(() => {
+    if (playing || document.hidden) return;
+    player.playVideo();
+    setTimeout(() => { if (!playing && !document.hidden) say("按 ▶ 繼續播放"); }, 1500);   // 瀏覽器不讓自動播的話，提示一下
+  }, 400);
   noAutoResume();
 });
 window.addEventListener("pagehide", savePos);
