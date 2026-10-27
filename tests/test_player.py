@@ -97,7 +97,18 @@ def test_auto_resume_setting_saved():
 
 
 def test_offline_home_not_overwritten():
-    """離線快取：只有打開首頁才存到首頁的位置（直接開 manifest.json 不會把首頁蓋掉）；舊的存放區會被清掉。"""
+    """離線快取：直接開 manifest.json 不會把首頁蓋掉；升級後第一次離線也打得開；只清自己的舊存放區。"""
     sw = (ROOT / "sw.js").read_text(encoding="utf-8")
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    # 只有打開首頁才存到首頁的位置（直接開 manifest.json 不會把首頁蓋掉）
     assert "const home = nav &&" in sw and 'includes("text/html")' in sw
-    assert '"taco-playlist-v2"' in sw and 'startsWith("taco-playlist")' in sw
+    # 換新存放區；只清自己舊版的（同網域其他 App 的不能刪），而且要新版存齊了才清
+    assert 'const PREFIX = "taco-playlist"' in sw and 'const CACHE = PREFIX + "-v2"' in sw
+    assert "k.startsWith(PREFIX) && k !== CACHE" in sw and "hits.every(Boolean)" in sw
+    # 沒網路時先找自己這一版的存放區
+    assert "caches.open(CACHE).then((c) => c.match(key))" in sw
+    # 網頁用到的每個程式檔、樣式檔都要預先存好，升級後第一次離線才打得開
+    core = re.search(r"const CORE = \[(.*?)\];", sw, re.S).group(1)
+    for f in re.findall(r'<script src="([^"]+)"', html) + re.findall(r'<link rel="stylesheet" href="([^"]+)"', html):
+        if not f.startswith("http"):
+            assert '"./' + f + '"' in core, f
