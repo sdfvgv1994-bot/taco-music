@@ -94,3 +94,10 @@ def test_auto_resume_setting_saved():
     app = (ROOT / "app.js").read_text(encoding="utf-8")
     assert "autoResume: st.autoResume !== false" in app
     assert 'id="auto"' in (ROOT / "index.html").read_text(encoding="utf-8")
+
+
+def test_offline_home_not_overwritten():
+    """離線快取：只有打開首頁才存到首頁的位置（直接開 manifest.json 不會把首頁蓋掉）；舊的存放區會被清掉。"""
+    sw = (ROOT / "sw.js").read_text(encoding="utf-8")
+    assert "const home = nav &&" in sw and 'includes("text/html")' in sw
+    assert '"taco-playlist-v2"' in sw and 'startsWith("taco-playlist")' in sw
